@@ -5,73 +5,63 @@ from datetime import datetime
 
 # 1. 설정
 DISCORD_WEBHOOK_URL = os.environ.get('WHALE_WEBHOOK')
-TEST_MODE = True # 성공 확인을 위해 True 유지
+TEST_MODE = True # 성공 확인을 위해 일단 True 유지
 
 def get_insider_trades():
-    # 404 에러를 피하기 위한 최신 경로 (HTTPS 권장)
-    url = "https://openinsider.com/latest-insider-trades"
+    # 주소를 Finviz로 변경 (최신 내부자 거래 페이지)
+    url = "https://finviz.com/insidertrading.ashx"
     
+    # 더 사람 같은 헤더 설정 (핀비즈 방어막 돌파용)
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Referer": "https://finviz.com/"
     }
     
     try:
-        # 세션을 사용하여 연결 안정성 확보
-        session = requests.Session()
-        response = session.get(url, headers=headers, timeout=20)
-        response.raise_for_status() 
+        response = requests.get(url, headers=headers, timeout=20)
+        response.raise_for_status()
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # 'Ticker'라는 텍스트가 포함된 테이블을 더 정밀하게 찾기
-        table = None
-        for t in soup.find_all('table'):
-            header_text = t.find('tr').text if t.find('tr') else ""
-            if 'Ticker' in header_text:
-                table = t
-                break
-        
-        if not table:
-            print("⚠️ 테이블 구조가 변경되었거나 접근이 차단되었습니다.")
-            return []
-        
-        rows = table.find_all('tr')
+        # 핀비즈 특유의 테이블 구조 찾기 (class='table-light' 또는 tr 루프)
+        rows = soup.find_all('tr', class_='insider-option-row')
+        if not rows:
+            # 다른 클래스명인 경우 대비
+            rows = soup.select('table.table-light tr')[1:11]
+            
         trades = []
         
-        # 상위 10개 데이터 행 파싱 (헤더 제외)
-        for row in rows[1:11]: 
+        for row in rows:
             cols = row.find_all('td')
-            if len(cols) < 10: continue
+            if len(cols) < 9: continue
             
-            # 데이터 추출
-            trade_type = cols[7].text.strip()
-            ticker = cols[3].text.strip().split('\n')[0] # 티커만 깔끔하게
-            insider = cols[4].text.strip()
-            title = cols[5].text.strip()
-            price = cols[8].text.strip()
-            value = cols[10].text.strip()
+            # 핀비즈 데이터 위치 (Ticker: 1, Insider: 2, Relationship: 3, Date: 4, Transaction: 5, Cost: 6, Shares: 7, Value: 8)
+            ticker = cols[1].text.strip()
+            insider = cols[2].text.strip()
+            relationship = cols[3].text.strip()
+            trade_type = cols[5].text.strip() # Buy / Sale
+            price = cols[6].text.strip()
+            value = cols[8].text.strip()
             
-            # 필터링: 테스트 모드 혹은 매수(Purchase)
-            is_purchase = "P - Purchase" in trade_type
-            if TEST_MODE or is_purchase:
+            # 'Buy'만 필터링 (TEST_MODE일 땐 전체)
+            is_buy = "Buy" in trade_type
+            if TEST_MODE or is_buy:
                 trades.append({
-                    "title": f"{'🚀 [매수]' if is_purchase else '📉 [매도/기타]'} 포착: {ticker}",
-                    "description": f"👤 **{insider}** ({title})\n💰 규모: **{value}**\n💵 가격: {price}",
-                    "color": 3066993 if is_purchase else 15105570
+                    "title": f"{'🚀 [매수]' if is_buy else '📉 [매도/기타]'} 포착: {ticker}",
+                    "description": f"👤 **{insider}** ({relationship})\n💰 규모: **${value}**\n💵 가격: ${price}",
+                    "color": 3066993 if is_buy else 15105570
                 })
-                
+        
         return trades
 
-    except requests.exceptions.HTTPError as e:
-        print(f"❌ 접속 오류 (주소 확인 필요): {e}")
     except Exception as e:
-        print(f"❌ 알 수 없는 오류: {e}")
-    return []
+        print(f"❌ 핀비즈 접속 오류: {e}")
+        return []
 
 def send_to_discord():
     if not DISCORD_WEBHOOK_URL:
-        print("❌ WHALE_WEBHOOK 시크릿이 설정되지 않았습니다.")
+        print("❌ WHALE_WEBHOOK 시크릿 설정 누락")
         return
 
     trades = get_insider_trades()
@@ -86,7 +76,7 @@ def send_to_discord():
                 "description": t["description"],
                 "color": t["color"],
                 "timestamp": datetime.utcnow().isoformat(),
-                "footer": {"text": "주린이 계산기 - 세력 실시간 감시"}
+                "footer": {"text": "주린이 계산기 - 세력 추적 (Powered by Finviz)"}
             } for t in trades[:5]
         ]
     }
