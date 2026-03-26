@@ -3,69 +3,78 @@ from bs4 import BeautifulSoup
 import os
 from datetime import datetime
 
-# 1. 설정: GitHub Secrets에 등록한 웹훅 주소
+# 1. 설정
 DISCORD_WEBHOOK_URL = os.environ.get('WHALE_WEBHOOK')
-
-# 2. 테스트 모드 설정 (True로 바꾸면 매도 기록도 다 가져와서 디스코드로 쏩니다)
-TEST_MODE = False 
+TEST_MODE = True # 일단 지금은 성공 여부를 확인해야 하니 True로 두세요!
 
 def get_insider_trades():
     url = "http://openinsider.com/insider-transactions-25k"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    
+    # 봇이 아니라 실제 '크롬 브라우저'인 척 속이는 더 강력한 헤더
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
+    }
     
     try:
-        response = requests.get(url, headers=headers)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        table = soup.find('table', class_='tinytable')
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status() # 접속 실패 시 에러 발생
         
-        if not table: 
-            print("❌ 테이블을 찾을 수 없습니다. 사이트 구조 변경 의심.")
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # [구조 변경 대응] 특정 클래스명이 없어도 'Ticker' 글자가 있는 테이블을 찾음
+        table = None
+        all_tables = soup.find_all('table')
+        for t in all_tables:
+            if 'Ticker' in t.text:
+                table = t
+                break
+        
+        if not table:
+            print("⚠️ 여전히 테이블을 찾을 수 없습니다. (사이트가 접근을 완전히 막았을 가능성)")
             return []
         
-        rows = table.find_all('tr')[1:11] # 최신 10건 검사
+        rows = table.find_all('tr')
         trades = []
         
-        for row in rows:
+        # 데이터는 보통 2번째 줄(index 1)부터 시작
+        for row in rows[1:11]: 
             cols = row.find_all('td')
             if len(cols) < 10: continue
             
             trade_type = cols[7].text.strip()
             
-            # [필터링 로직] TEST_MODE가 꺼져있으면 'Purchase'만, 켜져있으면 전부 다!
+            # 테스트 모드이거나 매수(Purchase)일 때만 수집
             if TEST_MODE or ("P - Purchase" in trade_type):
-                ticker = cols[3].text.strip()
+                ticker = cols[3].text.strip().replace('\x1b', '') # 이상한 문자 제거
                 insider = cols[4].text.strip()
                 title = cols[5].text.strip()
                 price = cols[8].text.strip()
                 value = cols[10].text.strip()
                 
-                # 매수면 초록색(3066993), 매도면 주황색(15105570)
-                is_purchase = "P - Purchase" in trade_type
-                color = 3066993 if is_purchase else 15105570
-                status_text = "🚀 [내부자 매수]" if is_purchase else "📉 [내부자 매도(테스트)]"
-                
+                is_p = "P - Purchase" in trade_type
                 trades.append({
-                    "title": f"{status_text} 포착: {ticker}",
-                    "description": f"👤 **{insider}** ({title})\n💰 거래규모: **{value}**\n💵 가격: {price}",
-                    "color": color
+                    "title": f"{'🚀 [매수]' if is_p else '📉 [매도/기타]'} 포착: {ticker}",
+                    "description": f"👤 **{insider}** ({title})\n💰 규모: **{value}**\n💵 가격: {price}",
+                    "color": 3066993 if is_p else 15105570
                 })
+                
         return trades
     except Exception as e:
-        print(f"❌ 데이터 로딩 중 에러 발생: {e}")
+        print(f"❌ 오류 발생: {e}")
         return []
 
 def send_to_discord():
     if not DISCORD_WEBHOOK_URL:
-        print("❌ 에러: WHALE_WEBHOOK 시크릿 설정이 안 되어 있습니다.")
+        print("❌ WHALE_WEBHOOK 설정 누락")
         return
 
     trades = get_insider_trades()
-    
     if not trades:
-        print("✅ 현재 필터링 조건에 맞는 거래가 없습니다. (디스코드 전송 스킵)")
+        print("✅ 현재 조건에 맞는 데이터가 없습니다.")
         return
 
-    # 디스코드 전송
     payload = {
         "embeds": [
             {
@@ -73,16 +82,13 @@ def send_to_discord():
                 "description": t["description"],
                 "color": t["color"],
                 "timestamp": datetime.utcnow().isoformat(),
-                "footer": {"text": "주린이 계산기 - 고래 추적 시스템"}
-            } for t in trades[:10] # 최대 10건만 전송
+                "footer": {"text": "주린이 계산기 - 세력 실시간 감시"}
+            } for t in trades[:5] # 너무 많으면 5개만 전송
         ]
     }
     
-    response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
-    if response.status_code == 204 or response.status_code == 200:
-        print(f"✅ {len(trades)}건의 데이터를 디스코드로 쐈습니다!")
-    else:
-        print(f"❌ 디스코드 전송 실패: {response.status_code}")
+    requests.post(DISCORD_WEBHOOK_URL, json=payload)
+    print(f"✅ {len(trades)}건 전송 시도 완료!")
 
 if __name__ == "__main__":
     send_to_discord()
