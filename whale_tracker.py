@@ -7,7 +7,7 @@ from datetime import datetime
 DISCORD_WEBHOOK_URL = os.environ.get('WHALE_WEBHOOK')
 SERVER_URL = "https://dividend-server.onrender.com/update_intel"
 # 🚨 테스트 완료! 다시 진짜 고래 사냥 모드로 전환
-TEST_MODE = False 
+TEST_MODE = True 
 
 def convert_value_to_num(val_str):
     try:
