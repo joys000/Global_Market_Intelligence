@@ -1,0 +1,27 @@
+name: Whale Insider Alert
+
+on:
+  schedule:
+    - cron: '0 */6 * * *' # 6시간마다 자동 실행
+  workflow_dispatch: # 수동 실행 버튼
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Whale Tracker
+        env:
+          WHALE_WEBHOOK: ${{ secrets.WHALE_WEBHOOK }}
+        run: python whale_tracker.py
