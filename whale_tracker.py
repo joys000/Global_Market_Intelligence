@@ -8,7 +8,7 @@ from datetime import datetime
 DISCORD_WEBHOOK_URL = os.environ.get('WHALE_WEBHOOK')
 # 🚨 렌더 서버의 인텔리전스 통합 창고 주소
 SERVER_URL = "https://dividend-server.onrender.com/update_intel"
-TEST_MODE = False # True로 바꾸면 100만 달러 미만도 수집함 (테스트용)
+TEST_MODE = True # True로 바꾸면 100만 달러 미만도 수집함 (테스트용)
 
 def convert_value_to_num(val_str):
     """문자열 금액($1.2M 등)을 숫자(float)로 변환"""
