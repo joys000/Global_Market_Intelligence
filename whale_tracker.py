@@ -4,11 +4,11 @@ import os
 import json
 from datetime import datetime
 
-# 1. 설정
+# 1. 환경 설정 (수정 금지)
 DISCORD_WEBHOOK_URL = os.environ.get('WHALE_WEBHOOK')
-# 🚨 우리 웹사이트 백엔드 주소 (인텔리전스 통합 창고)
+# 🚨 렌더 서버의 인텔리전스 통합 창고 주소
 SERVER_URL = "https://dividend-server.onrender.com/update_intel"
-TEST_MODE = False # 100만 달러 이상만 필터링하려면 False
+TEST_MODE = False # True로 바꾸면 100만 달러 미만도 수집함 (테스트용)
 
 def convert_value_to_num(val_str):
     """문자열 금액($1.2M 등)을 숫자(float)로 변환"""
@@ -26,6 +26,7 @@ def convert_value_to_num(val_str):
         return 0
 
 def get_insider_trades():
+    """핀비즈에서 최신 내부자 거래 데이터를 긁어옴"""
     url = "https://finviz.com/insidertrading.ashx"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -37,11 +38,12 @@ def get_insider_trades():
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         
+        # 핀비즈 테이블 구조 파악
         tables = soup.find_all('table', class_='table-light')
         rows = tables[0].find_all('tr') if tables else []
         
         raw_trades = []
-        for row in rows[1:20]: 
+        for row in rows[1:25]: # 상위 25개 필터링
             cols = row.find_all('td')
             if len(cols) < 9: continue
             
@@ -49,22 +51,23 @@ def get_insider_trades():
             value_str = cols[8].text.strip()
             value_num = convert_value_to_num(value_str)
             
-            # 🚨 필터 조건: 매수(Buy)이면서 100만 달러($1M) 이상
+            # 🚨 멘토의 필터링 조건: 오직 'Buy(매수)' 이면서 '$1,000,000(13억)' 이상만!
             is_buy = "Buy" in trade_type
             if TEST_MODE or (is_buy and value_num >= 1000000):
                 ticker = cols[1].text.strip()
                 insider = cols[2].text.strip()
                 relationship = cols[3].text.strip()
                 price = cols[6].text.strip()
+                date = cols[0].text.strip() # 거래 발생일
                 
-                # 우리 서버와 디스코드가 모두 사용할 수 있게 원본 데이터를 딕셔너리로 저장
                 raw_trades.append({
-                    "type": "WHALE",  # 인텔리전스 타입 구분
+                    "type": "WHALE",  # 우리 웹사이트가 고래 뱃지를 달아주기 위한 식별자
                     "symbol": ticker,
                     "owner": insider,
                     "relationship": relationship,
                     "value": f"${value_str}",
                     "price": price,
+                    "date": date,
                     "is_buy": is_buy
                 })
         
@@ -74,48 +77,51 @@ def get_insider_trades():
         return []
 
 def send_to_website_server(trade):
-    """우리 FastAPI 서버로 전송"""
+    """우리 렌더 백엔드 서버(FastAPI) 창고로 데이터 전송"""
     try:
-        # Render 서버가 깨어나는 시간을 고려해 timeout을 넉넉히 줌
+        # Render 무료 서버의 부팅 시간을 고려해 타임아웃 15초 부여
         res = requests.post(SERVER_URL, json=trade, timeout=15)
         if res.status_code == 200:
             print(f"✅ 웹사이트 전송 성공: {trade['symbol']}")
         else:
-            print(f"⚠️ 서버 응답 에러: {res.status_code}")
+            print(f"⚠️ 서버 응답 에러({res.status_code}): {trade['symbol']}")
     except Exception as e:
-        print(f"❌ 서버 연결 실패 (잠들어 있을 가능성): {e}")
+        print(f"❌ 서버 연결 실패 (서버가 자고 있거나 주소가 틀림): {e}")
 
 def send_to_discord(trades):
-    """디스코드 웹훅 전송"""
-    if not DISCORD_WEBHOOK_URL: return
+    """디스코드 채널 알림 전송"""
+    if not DISCORD_WEBHOOK_URL or not trades: return
 
     embeds = []
-    for t in trades[:10]:
+    for t in trades[:10]: # 한 번에 최대 10개만 보냄
         embeds.append({
             "title": f"🐋 초대형 고래 포착: {t['symbol']} ({t['value']})",
-            "description": f"👤 **{t['owner']}** ({t['relationship']})\n💰 총 거래액: **{t['value']}**\n💵 체결가: ${t['price']}",
-            "color": 3066993,
+            "description": f"👤 **{t['owner']}** ({t['relationship']})\n💰 총 거래액: **{t['value']}**\n💵 체결가: ${t['price']}\n📅 거래일: {t['date']}",
+            "color": 3066993, # 초록색
             "timestamp": datetime.utcnow().isoformat(),
-            "footer": {"text": "주린이 계산기 - 고래 추적 시스템"}
+            "footer": {"text": "주린이 인텔리전스 - 세력 추적기"}
         })
 
     payload = {"embeds": embeds}
-    requests.post(DISCORD_WEBHOOK_URL, json=payload)
-    print(f"📢 디스코드 알림 전송 완료! ({len(trades)}건)")
+    try:
+        requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
+        print(f"📢 디스코드 알림 전송 완료! ({len(trades)}건)")
+    except Exception as e:
+        print(f"❌ 디스코드 전송 실패: {e}")
 
 def run_whale_tracker():
-    print(f"🚀 고래 사냥 시작... ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})")
+    print(f"🚀 고래 사냥 시작... {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     trades = get_insider_trades()
     
     if not trades:
-        print("✅ 새로운 대형 거래가 없습니다.")
+        print("🔍 조건($1M 이상 매수)에 맞는 거래가 없습니다.")
         return
 
-    # 1. 우리 웹사이트 서버로 한 건씩 전송
+    # 1. 렌더 서버로 데이터 전송 (웹사이트 노출용)
     for trade in trades:
         send_to_website_server(trade)
 
-    # 2. 디스코드로 통합 전송
+    # 2. 디스코드로 데이터 전송 (알림용)
     send_to_discord(trades)
 
 if __name__ == "__main__":
