@@ -6,76 +6,83 @@ import time
 # 1. 렌더 서버 주소
 SERVER_URL = "https://dividend-server.onrender.com/update_intel"
 
-# 2. 고래들이 모이는 곳 (100만 달러 이상 매수 필터)
-WHALE_URL = "http://openinsider.com/screener?s=&o=&pl=&ph=&ll=&lh=&fd=3&fdr=&td=0&tdr=&fdy=&tdy=&v=1000&max_v=&mcl=&mch=&is=&isc=&ia=&iac=&it%5B%5D=p&it%5B%5D=pp&sort_col=0&sort_dir=0&record_cnt=10"
+# 2. 새로운 사냥터 (Finviz - 최신 내부자 거래 페이지)
+# 이 주소는 'Buy' 거래 위주로 보여주는 페이지야.
+WHALE_URL = "https://finviz.com/insidertrading.ashx?tc=1"
 
 def get_whale_data():
-    print(f"🌊 고래 사냥 시작... {datetime.now().strftime('%H:%M:%S')}")
+    print(f"🌊 새로운 사냥터(Finviz) 출동... {datetime.now().strftime('%H:%M:%S')}", flush=True)
     
+    # Finviz는 보안이 강력해서 브라우저인 척을 더 잘해야 해!
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
     }
     
-    # --- 🎣 1단계: 끈기 있게 그물 던지기 (Retry 로직) ---
-    success = False
     for attempt in range(3):
         try:
-            print(f"🎣 {attempt + 1}번째 그물 던지는 중...")
-            res = requests.get(WHALE_URL, headers=headers, timeout=60)
+            print(f"🎣 {attempt + 1}번째 그물 던지는 중 (Finviz)...", flush=True)
+            # Finviz는 https를 권장해!
+            res = requests.get(WHALE_URL, headers=headers, timeout=30)
             
             if res.status_code == 200:
-                print("✨ 사이트 접속 성공! 데이터 분석 시작...")
+                print("✨ Finviz 접속 성공! 대물 분석 시작...", flush=True)
                 soup = BeautifulSoup(res.text, 'html.parser')
                 
-                # --- 🔪 2단계: 물고기 손질하기 (데이터 추출) ---
-                rows = soup.find_all('tr')[1:]  # 헤더 제외
+                # Finviz의 내부자 거래 테이블 찾기
+                # 테이블 행(tr) 중 데이터가 들어있는 것들을 골라내자
+                rows = soup.select('table.styled-table-w-full tr')[1:] # 헤더 제외
                 
                 if not rows:
-                    print("⚠️ 잡힌 물고기가 없습니다. (조건에 맞는 데이터 없음)")
+                    print("⚠️ 오늘따라 고래들이 조용하네? (데이터 없음)", flush=True)
                     return
 
-                for row in rows[:5]:  # 최신 5건만
+                count = 0
+                for row in rows:
                     cols = row.find_all('td')
-                    if len(cols) < 11: continue
+                    if len(cols) < 9: continue
                     
-                    ticker = cols[3].text.strip()
-                    insider_name = cols[4].text.strip()
-                    title = cols[5].text.strip()
-                    price = cols[8].text.strip()
-                    quantity = cols[9].text.strip()
-                    value = cols[10].text.strip()
-
-                    display_title = f"🐋 [내부자 매수] {ticker} ({insider_name})"
-                    display_content = f"{title}가 {price} 달러에 {quantity}주 매수! (총액: {value})"
-                    link = f"https://finviz.com/quote.ashx?t={ticker}"
+                    # Finviz 컬럼 구조:
+                    # 1:Ticker, 2:Owner, 3:Relationship, 4:Date, 5:Transaction, 6:Cost, 7:#Shares, 8:Value($)
+                    ticker = cols[1].text.strip()
+                    owner = cols[2].text.strip()
+                    relationship = cols[3].text.strip()
+                    transaction = cols[5].text.strip() # "Option Exercise"는 거르고 "Buy"만!
+                    value = cols[8].text.strip()
                     
-                    news_data = {
-                        "type": "WHALE",
-                        "source": "OpenInsider",
-                        "symbol": ticker,
-                        "title": f"{display_title}: {display_content}",
-                        "link": link,
-                        "timestamp": datetime.now().strftime("%H:%M")
-                    }
-                    
-                    # --- 📤 3단계: 창고로 배송 (서버 전송) ---
-                    try:
-                        send_res = requests.post(SERVER_URL, json=news_data, timeout=30)
-                        if send_res.status_code == 200:
-                            print(f"✅ 고래 입고 완료: {ticker} ({value})")
-                    except Exception as e:
-                        print(f"❌ 서버 전송 실패: {e}")
+                    # 진짜 매수(Buy)만 입고시키자!
+                    if "Buy" in transaction:
+                        display_title = f"🐋 [내부자 매수] {ticker} ({owner})"
+                        display_content = f"{relationship}가 {value} 달러어치 매수!"
+                        link = f"https://finviz.com/quote.ashx?t={ticker}"
+                        
+                        news_data = {
+                            "type": "WHALE",
+                            "source": "Finviz",
+                            "symbol": ticker,
+                            "title": f"{display_title}: {display_content}",
+                            "link": link,
+                            "timestamp": datetime.now().strftime("%H:%M")
+                        }
+                        
+                        # 서버 입고
+                        try:
+                            requests.post(SERVER_URL, json=news_data, timeout=10)
+                            print(f"✅ 입고 완료: {ticker} ({value})", flush=True)
+                        except: pass
+                        
+                        count += 1
+                        if count >= 5: break # 너무 많으면 힘드니까 5개만!
                 
-                success = True
-                break  # 모든 작업 성공 시 루프 탈출
+                print(f"🎊 총 {count}마리의 고래를 창고에 넣었어!", flush=True)
+                break
+            else:
+                print(f"⚠️ 접속 실패 (상태 코드: {res.status_code})", flush=True)
                 
         except Exception as e:
-            print(f"⚠️ {attempt + 1}번째 시도 에러: {e}")
-            if attempt < 2:
-                print("⏳ 5초 뒤에 다시 던집니다...")
-                time.sleep(5)
-            else:
-                print("❌ 결국 사냥에 실패했습니다.")
+            print(f"❌ 에러 발생: {e}", flush=True)
+            time.sleep(5)
 
 if __name__ == "__main__":
     get_whale_data()
